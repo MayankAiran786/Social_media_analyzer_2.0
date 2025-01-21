@@ -8,7 +8,7 @@ import PyPDF2
 import os
 
 # Set Hugging Face API Token as an environment variable
-HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
+HUGGINGFACE_API_KEY = "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"  # Replace with your actual Hugging Face API key
 
 def analyze_text(text):
     """Performs enhanced text analysis using spaCy."""
