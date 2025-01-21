@@ -6,6 +6,10 @@ import spacy
 import requests
 import PyPDF2
 import os
+import fitz  # PyMuPDF
+import pytesseract
+from PIL import Image
+import io
 
 # Set Hugging Face API Token as an environment variable
 HUGGINGFACE_API_KEY = "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"  # Replace with your actual Hugging Face API key
@@ -58,12 +62,15 @@ def display_sentiment_bar(sentiment_score):
     else:
         st.write("Sentiment: Very Negative")
 
-def get_engagement_suggestions_via_huggingface(text):
-    """Generates intelligent engagement suggestions using Hugging Face API."""
+import time
+import requests
+
+def get_engagement_suggestions_via_huggingface(text, retries=3, delay=5):
+    """Generates intelligent engagement suggestions using Hugging Face API with retries."""
     if not HUGGINGFACE_API_KEY:
         st.error("Hugging Face API key is missing. Please set it as an environment variable.")
         return ["Unable to generate suggestions due to missing API key."]
-
+    
     api_url = "https://api-inference.huggingface.co/models/EleutherAI/gpt-neo-2.7B"
     headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
 
@@ -74,39 +81,63 @@ def get_engagement_suggestions_via_huggingface(text):
 
     payload = {"inputs": prompt}
 
-    try:
-        response = requests.post(api_url, headers=headers, json=payload)
-        response.raise_for_status()  # Check for HTTP errors
-        generated_text = response.json()[0]["generated_text"]
-        # Clean up the generated text for point-wise display
-        suggestions = [
-            suggestion.strip("- ").strip() for suggestion in generated_text.strip().split("\n") if suggestion.strip()
-        ]
-        return suggestions
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error generating suggestions: {e}")
-        return ["Error generating suggestions. Please try again later."]
-
-def extract_text_from_uploaded_file(uploaded_file):
-    """Extracts text from uploaded PDFs or images."""
-    file_bytes = uploaded_file.read()
-    if uploaded_file.type == "application/pdf":
+    for attempt in range(retries):
         try:
-            reader = PyPDF2.PdfReader(uploaded_file)
-            text = "".join(page.extract_text() for page in reader.pages)
+            response = requests.post(api_url, headers=headers, json=payload, timeout=60)
+            response.raise_for_status()  # Check for HTTP errors
+            generated_text = response.json()[0]["generated_text"]
+            suggestions = [suggestion.strip("- ").strip() for suggestion in generated_text.strip().split("\n") if suggestion.strip()]
+            return suggestions
+        except requests.exceptions.RequestException as e:
+            if attempt < retries - 1:
+                time.sleep(delay)  # Wait before retrying
+            else:
+                st.error(f"Error generating suggestions: {e}")
+                return ["Error generating suggestions. Please try again later."]
+
+
+def extract_text_from_scanned_pdf(uploaded_file):
+    """Extracts text from scanned PDFs by converting pages to images and performing OCR."""
+    file_bytes = uploaded_file.read()
+
+    # Check the MIME type of the uploaded file
+    mime_type = uploaded_file.type
+
+    if "pdf" in mime_type:
+        try:
+            # Open the uploaded PDF file with PyMuPDF
+            pdf_document = fitz.open(stream=file_bytes, filetype="pdf")
+            text = ""
+            
+            # Iterate through each page and convert it to an image
+            for page_num in range(pdf_document.page_count):
+                page = pdf_document.load_page(page_num)  # Get the page
+                pix = page.get_pixmap()  # Get a pixmap (image) from the page
+                
+                # Convert the pixmap to a PIL Image
+                img = Image.open(io.BytesIO(pix.tobytes("png")))  # Convert to PNG format
+                
+                # Perform OCR on the image
+                text += pytesseract.image_to_string(img)
+
         except Exception as e:
             text = None
-            st.error(f"Error extracting text from PDF: {e}")
-    elif uploaded_file.type in ["image/jpeg", "image/png"]:
+            st.error(f"Error extracting text from scanned PDF: {e}")
+    
+    elif "image" in mime_type:
         try:
-            image = Image.open(uploaded_file)
+            # Handle image files (JPG, PNG, etc.)
+            image = Image.open(io.BytesIO(file_bytes))
             text = pytesseract.image_to_string(image)
+
         except Exception as e:
             text = None
             st.error(f"Error performing OCR on image: {e}")
+    
     else:
         text = None
         st.error("Unsupported file type.")
+
     return text
 
 def main():
@@ -115,7 +146,8 @@ def main():
     uploaded_file = st.file_uploader("Upload file (PDF or scanned PDF)", type=["pdf", "jpg", "jpeg", "png"])
 
     if uploaded_file is not None:
-        extracted_text = extract_text_from_uploaded_file(uploaded_file)
+        # Updated function call to handle scanned PDFs
+        extracted_text = extract_text_from_scanned_pdf(uploaded_file)
 
         if extracted_text:
             st.text("Extracted Text:")
